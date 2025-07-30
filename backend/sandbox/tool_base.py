@@ -31,77 +31,82 @@ class SandboxToolsBase(Tool):
         If the project does not yet have a sandbox, create it lazily and persist
         the metadata to the `projects` table so subsequent calls can reuse it.
         """
+        logger.info(f"[ENSURE_SANDBOX] Starting sandbox initialization for project: {self.project_id}")
+        
         if self._sandbox is None:
             try:
-                # Get database client
+                # Step 1: Get database client
+                logger.info(f"[ENSURE_SANDBOX] Step 1: Getting database client...")
                 client = await self.thread_manager.db.client
-
-                # Get project data
+                logger.info(f"[ENSURE_SANDBOX] ✅ Database client obtained successfully")
+                
+                # Step 2: Get project data
+                logger.info(f"[ENSURE_SANDBOX] Step 2: Fetching project data for ID: {self.project_id}")
                 project = await client.table('projects').select('*').eq('project_id', self.project_id).execute()
+                logger.info(f"[ENSURE_SANDBOX] Project query result: {len(project.data) if project.data else 0} records found")
+                
                 if not project.data or len(project.data) == 0:
-                    raise ValueError(f"Project {self.project_id} not found")
-
+                    logger.error(f"[ENSURE_SANDBOX] ❌ Project not found: {self.project_id}")
+                    raise ValueError(f"Project {self.project_id} not found in database. Please verify project exists.")
+                
                 project_data = project.data[0]
-                sandbox_info = project_data.get('sandbox') or {}
-
-                # If there is no sandbox recorded for this project, create one lazily
+                logger.info(f"[ENSURE_SANDBOX] Project data keys: {list(project_data.keys())}")
+                
+                # Step 3: Extract sandbox info
+                logger.info(f"[ENSURE_SANDBOX] Step 3: Extracting sandbox information...")
+                sandbox_info = project_data.get('sandbox', {})
+                logger.info(f"[ENSURE_SANDBOX] Sandbox info: {sandbox_info}")
+                
                 if not sandbox_info.get('id'):
-                    logger.debug(f"No sandbox recorded for project {self.project_id}; creating lazily")
-                    sandbox_pass = str(uuid.uuid4())
-                    sandbox_obj = await create_sandbox(sandbox_pass, self.project_id)
-                    sandbox_id = sandbox_obj.id
+                    logger.error(f"[ENSURE_SANDBOX] ❌ No sandbox ID found for project {self.project_id}")
+                    logger.error(f"[ENSURE_SANDBOX] Sandbox info content: {sandbox_info}")
+                    raise ValueError(f"No sandbox found for project {self.project_id}")
+                
+                # Step 4: Store sandbox info
+                logger.info(f"[ENSURE_SANDBOX] Step 4: Storing sandbox information...")
+                self._sandbox_id = sandbox_info['id']
+                self._sandbox_pass = sandbox_info.get('pass')
+                logger.info(f"[ENSURE_SANDBOX] Sandbox ID: {self._sandbox_id}")
+                logger.info(f"[ENSURE_SANDBOX] Sandbox pass: {'***set***' if self._sandbox_pass else 'not set'}")
+                
+                # Step 5: Get or start the sandbox
+                logger.info(f"[ENSURE_SANDBOX] Step 5: Getting or starting sandbox...")
+                self._sandbox = await get_or_start_sandbox(self._sandbox_id)
+                logger.info(f"[ENSURE_SANDBOX] ✅ Sandbox instance obtained successfully")
+                
+                # # Log URLs if not already printed
+                # if not SandboxToolsBase._urls_printed:
+                #     vnc_link = self._sandbox.get_preview_link(6080)
+                #     website_link = self._sandbox.get_preview_link(8080)
                     
-                    # Wait 5 seconds for services to start up
-                    logger.info(f"Waiting 5 seconds for sandbox {sandbox_id} services to initialize...")
-                    await asyncio.sleep(5)
+                #     vnc_url = vnc_link.url if hasattr(vnc_link, 'url') else str(vnc_link)
+                #     website_url = website_link.url if hasattr(website_link, 'url') else str(website_link)
                     
-                    # Gather preview links and token (best-effort parsing)
-                    try:
-                        vnc_link = await sandbox_obj.get_preview_link(6080)
-                        website_link = await sandbox_obj.get_preview_link(8080)
-                        vnc_url = vnc_link.url if hasattr(vnc_link, 'url') else str(vnc_link).split("url='")[1].split("'")[0]
-                        website_url = website_link.url if hasattr(website_link, 'url') else str(website_link).split("url='")[1].split("'")[0]
-                        token = vnc_link.token if hasattr(vnc_link, 'token') else (str(vnc_link).split("token='")[1].split("'")[0] if "token='" in str(vnc_link) else None)
-                    except Exception:
-                        # If preview link extraction fails, still proceed but leave fields None
-                        logger.warning(f"Failed to extract preview links for sandbox {sandbox_id}", exc_info=True)
-                        vnc_url = None
-                        website_url = None
-                        token = None
-
-                    # Persist sandbox metadata to project record
-                    update_result = await client.table('projects').update({
-                        'sandbox': {
-                            'id': sandbox_id,
-                            'pass': sandbox_pass,
-                            'vnc_preview': vnc_url,
-                            'sandbox_url': website_url,
-                            'token': token
-                        }
-                    }).eq('project_id', self.project_id).execute()
-
-                    if not update_result.data:
-                        # Cleanup created sandbox if DB update failed
-                        try:
-                            await delete_sandbox(sandbox_id)
-                        except Exception:
-                            logger.error(f"Failed to delete sandbox {sandbox_id} after DB update failure", exc_info=True)
-                        raise Exception("Database update failed when storing sandbox metadata")
-
-                    # Store local metadata and ensure sandbox is ready
-                    self._sandbox_id = sandbox_id
-                    self._sandbox_pass = sandbox_pass
-                    self._sandbox = await get_or_start_sandbox(self._sandbox_id)
-                else:
-                    # Use existing sandbox metadata
-                    self._sandbox_id = sandbox_info['id']
-                    self._sandbox_pass = sandbox_info.get('pass')
-                    self._sandbox = await get_or_start_sandbox(self._sandbox_id)
-
+                #     print("\033[95m***")
+                #     print(f"VNC URL: {vnc_url}")
+                #     print(f"Website URL: {website_url}")
+                #     print("***\033[0m")
+                #     SandboxToolsBase._urls_printed = True
+                
             except Exception as e:
-                logger.error(f"Error retrieving/creating sandbox for project {self.project_id}: {str(e)}", exc_info=True)
-                raise e
-
+                logger.error(f"[ENSURE_SANDBOX] ❌ FATAL ERROR during sandbox initialization: {str(e)}", exc_info=True)
+                logger.error(f"[ENSURE_SANDBOX] Error type: {type(e).__name__}")
+                logger.error(f"[ENSURE_SANDBOX] Error args: {e.args}")
+                logger.error(f"[ENSURE_SANDBOX] Project ID: {self.project_id}")
+                
+                if "not found" in str(e).lower():
+                    logger.error(f"[ENSURE_SANDBOX] Project not found error")
+                    raise ValueError(f"Project {self.project_id} not found in database. Please verify project exists.")
+                elif "sandbox" in str(e).lower():
+                    logger.error(f"[ENSURE_SANDBOX] Sandbox-specific error")
+                    raise ValueError(f"Sandbox initialization failed for project {self.project_id}: {str(e)}")
+                else:
+                    logger.error(f"[ENSURE_SANDBOX] General database/service error")
+                    raise ValueError(f"Database or sandbox service error for project {self.project_id}: {str(e)}")
+        else:
+            logger.info(f"[ENSURE_SANDBOX] Sandbox already initialized for project: {self.project_id}")
+        
+        logger.info(f"[ENSURE_SANDBOX] ✅ Sandbox ready - returning instance")
         return self._sandbox
 
     @property
