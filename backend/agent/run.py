@@ -409,7 +409,11 @@ class AgentRunner:
             else:
                 enabled_tools = None
 
-        if enabled_tools is None:
+        # Always register all tools if no specific tools are enabled (development mode safeguard)
+        if enabled_tools is None or (isinstance(enabled_tools, dict) and not any(
+            tool_config.get('enabled', False) if isinstance(tool_config, dict) else bool(tool_config) 
+            for tool_config in enabled_tools.values()
+        )):
             tool_manager.register_all_tools()
         else:
             if not isinstance(enabled_tools, dict):
