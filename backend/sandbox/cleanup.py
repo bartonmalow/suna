@@ -4,7 +4,7 @@ Automatic sandbox cleanup functions for maintaining system health.
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 from sandbox.sandbox import delete_sandbox, daytona
 from utils.db import DBConnection
@@ -24,7 +24,7 @@ async def cleanup_old_sandboxes(max_age_hours: int = 24) -> int:
         # Get all sandboxes from Daytona
         sandboxes = await daytona.list()
         old_sandboxes = []
-        cutoff_time = datetime.utcnow() - timedelta(hours=max_age_hours)
+        cutoff_time = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(hours=max_age_hours)
         
         for sandbox in sandboxes:
             # Check if sandbox is old (created before cutoff)
