@@ -14,7 +14,6 @@ services:
       retries: 3
 
   backend:
-    image: ghcr.io/suna-ai/suna-backend:latest
     platform: linux/amd64
     build:
       context: ./backend
@@ -37,7 +36,6 @@ services:
         condition: service_started
 
   worker:
-    image: ghcr.io/suna-ai/suna-backend:latest
     platform: linux/amd64
     build:
       context: ./backend
