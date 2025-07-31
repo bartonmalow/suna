@@ -5,6 +5,7 @@ from utils.cache import Cache
 from utils.logger import logger
 from utils.config import config
 from services import redis
+from sandbox.sandbox import delete_sandbox
 from run_agent_background import update_agent_run_status
 
 
@@ -15,6 +16,47 @@ async def _cleanup_redis_response_list(agent_run_id: str):
         logger.debug(f"Cleaned up Redis response list for agent run {agent_run_id}")
     except Exception as e:
         logger.warning(f"Failed to clean up Redis response list for {agent_run_id}: {str(e)}")
+
+async def _cleanup_project_sandbox(client, agent_run_id: str):
+    """Clean up the sandbox associated with an agent run's project."""
+    try:
+        # Get the agent run to find the project_id
+        agent_run_result = await client.table('agent_runs').select('project_id').eq('id', agent_run_id).execute()
+        
+        if not agent_run_result.data or len(agent_run_result.data) == 0:
+            logger.warning(f"No agent run found with ID {agent_run_id} for sandbox cleanup")
+            return
+            
+        project_id = agent_run_result.data[0]['project_id']
+        
+        # Get the project to find the sandbox ID
+        project_result = await client.table('projects').select('sandbox').eq('project_id', project_id).execute()
+        
+        if not project_result.data or len(project_result.data) == 0:
+            logger.warning(f"No project found with ID {project_id} for sandbox cleanup")
+            return
+            
+        sandbox_info = project_result.data[0].get('sandbox', {})
+        sandbox_id = sandbox_info.get('id')
+        
+        if not sandbox_id:
+            logger.info(f"No sandbox ID found for project {project_id} - skipping cleanup")
+            return
+            
+        # Delete the sandbox
+        logger.info(f"Cleaning up sandbox {sandbox_id} for project {project_id}")
+        success = await delete_sandbox(sandbox_id)
+        
+        if success:
+            # Update the project to remove sandbox info
+            await client.table('projects').update({'sandbox': None}).eq('project_id', project_id).execute()
+            logger.info(f"Successfully deleted sandbox {sandbox_id} and updated project {project_id}")
+        else:
+            logger.error(f"Failed to delete sandbox {sandbox_id} for project {project_id}")
+            
+    except Exception as e:
+        logger.error(f"Error during sandbox cleanup for agent run {agent_run_id}: {str(e)}")
+        # Don't re-raise - cleanup failures shouldn't block agent run stopping
 
 
 async def check_for_active_project_agent_run(client, project_id: str):
@@ -77,6 +119,9 @@ async def stop_agent_run(db, agent_run_id: str, error_message: Optional[str] = N
 
     except Exception as e:
         logger.error(f"Failed to find or signal active instances for {agent_run_id}: {str(e)}")
+
+    # 🔧 FIX: Add sandbox cleanup when agent run stops/fails
+    await _cleanup_project_sandbox(client, agent_run_id)
 
     logger.debug(f"Successfully initiated stop process for agent run: {agent_run_id}")
 
