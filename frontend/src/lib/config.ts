@@ -39,6 +39,7 @@ export interface SubscriptionTiers {
 interface Config {
   ENV_MODE: EnvMode;
   IS_LOCAL: boolean;
+  DISABLE_AUTH: boolean;
   IS_STAGING: boolean;
   SUBSCRIPTION_TIERS: SubscriptionTiers;
 }
@@ -219,9 +220,38 @@ function getEnvironmentMode(): EnvMode {
 
 const currentEnvMode = getEnvironmentMode();
 
+// Determine if authentication should be disabled
+const getDisableAuth = (envMode: EnvMode): boolean => {
+  // Check explicit environment variable first
+  const disableAuthEnv = process.env.NEXT_PUBLIC_DISABLE_AUTH?.toLowerCase();
+  if (disableAuthEnv === 'true' || disableAuthEnv === '1') {
+    console.log('🔓 Authentication disabled via NEXT_PUBLIC_DISABLE_AUTH');
+    return true;
+  }
+
+  // For local development, you can disable auth but it's not automatic
+  // This maintains security by default while allowing easy bypass for development
+  return false;
+};
+
+// Determine if authentication should be disabled
+const getDisableAuth = (envMode: EnvMode): boolean => {
+  // Check explicit environment variable first
+  const disableAuthEnv = process.env.NEXT_PUBLIC_DISABLE_AUTH?.toLowerCase();
+  if (disableAuthEnv === 'true' || disableAuthEnv === '1') {
+    console.log('🔓 Authentication disabled via NEXT_PUBLIC_DISABLE_AUTH');
+    return true;
+  }
+
+  // For local development, you can disable auth but it's not automatic
+  // This maintains security by default while allowing easy bypass for development
+  return false;
+};
+
 export const config: Config = {
   ENV_MODE: currentEnvMode,
   IS_LOCAL: currentEnvMode === EnvMode.LOCAL,
+  DISABLE_AUTH: getDisableAuth(currentEnvMode),
   IS_STAGING: currentEnvMode === EnvMode.STAGING,
   SUBSCRIPTION_TIERS:
     currentEnvMode === EnvMode.STAGING ? STAGING_TIERS : PROD_TIERS,
@@ -229,6 +259,11 @@ export const config: Config = {
 
 export const isLocalMode = (): boolean => {
   return config.IS_LOCAL;
+};
+
+// Helper function to check if authentication is disabled (for component conditionals)
+export const isAuthDisabled = (): boolean => {
+  return config.DISABLE_AUTH;
 };
 
 export const isStagingMode = (): boolean => {
