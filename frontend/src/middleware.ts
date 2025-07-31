@@ -1,7 +1,16 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { config as appConfig } from '@/lib/config'
 
 export async function middleware(request: NextRequest) {
+  // Skip authentication entirely if disabled in config
+  if (appConfig.DISABLE_AUTH) {
+    console.log('🔓 Auth disabled - skipping middleware authentication checks');
+    return NextResponse.next({
+      request,
+    });
+  }
+
   let supabaseResponse = NextResponse.next({
     request,
   })
@@ -36,11 +45,11 @@ export async function middleware(request: NextRequest) {
   // Define protected routes
   const protectedRoutes = ['/dashboard', '/agents', '/projects', '/settings', '/invitation']
   const authRoutes = ['/auth', '/login', '/signup']
-  
-  const isProtectedRoute = protectedRoutes.some(route => 
+
+  const isProtectedRoute = protectedRoutes.some(route =>
     request.nextUrl.pathname.startsWith(route)
   )
-  const isAuthRoute = authRoutes.some(route => 
+  const isAuthRoute = authRoutes.some(route =>
     request.nextUrl.pathname.startsWith(route)
   )
 
@@ -82,4 +91,4 @@ export const config = {
      */
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
-} 
+}
