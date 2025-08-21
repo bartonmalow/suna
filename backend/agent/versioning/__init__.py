@@ -1,8 +1,9 @@
-from .version_service import (
+from .services.version_service import (
     VersionService,
     AgentVersion,
-    VersionStatus,
-    get_version_service,
+    VersionStatus
+)
+from .services.exceptions import (
     VersionServiceError,
     VersionNotFoundError,
     AgentNotFoundError,
@@ -10,6 +11,7 @@ from .version_service import (
     InvalidVersionError,
     VersionConflictError
 )
+from .infrastructure.dependencies import get_version_service
 
 __all__ = [
     'VersionService',

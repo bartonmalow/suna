@@ -370,7 +370,7 @@ After connecting, you'll be able to use {result.toolkit.name} tools in your agen
                     updated_mcps = [mcp for mcp in current_custom_mcps if mcp.get('config', {}).get('profile_id') != profile_id]
                     
                     if len(updated_mcps) != len(current_custom_mcps):
-                        from agent.versioning.version_service import get_version_service
+                        from agent.versioning.infrastructure.dependencies import get_version_service
                         try:
                             current_tools['custom_mcp'] = updated_mcps
                             current_config['tools'] = current_tools

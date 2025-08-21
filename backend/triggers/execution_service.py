@@ -247,7 +247,7 @@ class AgentExecutor:
                     'agentpress_tools': {},
                 }
             
-            from agent.versioning.version_service import get_version_service
+            from agent.versioning.infrastructure.dependencies import get_version_service
             version_service = await get_version_service()
             
             user_id_for_version = account_id if account_id else "system"
@@ -500,7 +500,7 @@ class WorkflowExecutor:
             agent_data = agent_result.data[0]
             account_id = agent_data['account_id']
             
-            from agent.versioning.version_service import get_version_service
+            from agent.versioning.infrastructure.dependencies import get_version_service
             version_service = await get_version_service()
             
             active_version = await version_service.get_active_version(agent_id, "system")
