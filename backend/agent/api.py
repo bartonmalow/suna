@@ -25,12 +25,12 @@ from utils.constants import MODEL_NAME_ALIASES
 from flags.flags import is_enabled
 
 from .config_helper import extract_agent_config, build_unified_config, extract_tools_for_agent_run, get_mcp_configs
-from .versioning.version_service import get_version_service
+from .versioning.services.version_service import get_version_service
 from .versioning.api import router as version_router, initialize as initialize_versioning
 
 # Helper for version service
 async def _get_version_service():
-    return await get_version_service()
+    return await get_version_service(db)
 from utils.suna_default_agent_service import SunaDefaultAgentService
 
 router = APIRouter()
@@ -476,6 +476,179 @@ async def stop_agent(agent_run_id: str, user_id: str = Depends(get_current_user_
     await get_agent_run_with_access_check(client, agent_run_id, user_id)
     await stop_agent_run(agent_run_id)
     return {"status": "stopped"}
+
+@router.get("/thread/{thread_id}/agent-runs")
+async def get_agent_runs(thread_id: str, user_id: str = Depends(get_current_user_id_from_jwt)):
+    """Get all agent runs for a thread."""
+    structlog.contextvars.bind_contextvars(
+        thread_id=thread_id,
+    )
+    logger.info(f"Fetching agent runs for thread: {thread_id}")
+    client = await db.client
+    await verify_thread_access(client, thread_id, user_id)
+    agent_runs = await client.table('agent_runs').select('id, thread_id, status, started_at, completed_at, error, created_at, updated_at').eq("thread_id", thread_id).order('created_at', desc=True).execute()
+    logger.debug(f"Found {len(agent_runs.data)} agent runs for thread: {thread_id}")
+    return {"agent_runs": agent_runs.data}
+
+@router.get("/agent-run/{agent_run_id}")
+async def get_agent_run(agent_run_id: str, user_id: str = Depends(get_current_user_id_from_jwt)):
+    """Get agent run status and responses."""
+    structlog.contextvars.bind_contextvars(
+        agent_run_id=agent_run_id,
+    )
+    logger.info(f"Fetching agent run details: {agent_run_id}")
+    client = await db.client
+    agent_run_data = await get_agent_run_with_access_check(client, agent_run_id, user_id)
+    # Note: Responses are not included here by default, they are in the stream or DB
+    return {
+        "id": agent_run_data['id'],
+        "threadId": agent_run_data['thread_id'],
+        "status": agent_run_data['status'],
+        "startedAt": agent_run_data['started_at'],
+        "completedAt": agent_run_data['completed_at'],
+        "error": agent_run_data['error']
+    }
+
+@router.get("/thread/{thread_id}/agent", response_model=ThreadAgentResponse)
+async def get_thread_agent(thread_id: str, user_id: str = Depends(get_current_user_id_from_jwt)):
+    """Get the agent details for a specific thread. Since threads are fully agent-agnostic, 
+    this returns the most recently used agent from agent_runs only."""
+    structlog.contextvars.bind_contextvars(
+        thread_id=thread_id,
+    )
+    logger.info(f"Fetching agent details for thread: {thread_id}")
+    client = await db.client
+    
+    try:
+        # Verify thread access and get thread data
+        await verify_thread_access(client, thread_id, user_id)
+        thread_result = await client.table('threads').select('account_id').eq('thread_id', thread_id).execute()
+        
+        if not thread_result.data:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        
+        thread_data = thread_result.data[0]
+        account_id = thread_data.get('account_id')
+        
+        effective_agent_id = None
+        agent_source = "none"
+        
+        # Get the most recently used agent from agent_runs
+        recent_agent_result = await client.table('agent_runs').select('agent_id', 'agent_version_id').eq('thread_id', thread_id).not_.is_('agent_id', 'null').order('created_at', desc=True).limit(1).execute()
+        if recent_agent_result.data:
+            effective_agent_id = recent_agent_result.data[0]['agent_id']
+            recent_version_id = recent_agent_result.data[0].get('agent_version_id')
+            agent_source = "recent"
+            logger.info(f"Found most recently used agent: {effective_agent_id} (version: {recent_version_id})")
+        
+        # If no agent found in agent_runs
+        if not effective_agent_id:
+            return {
+                "agent": None,
+                "source": "none",
+                "message": "No agent has been used in this thread yet. Threads are agent-agnostic - use /agent/start to select an agent."
+            }
+        
+        # Fetch the agent details
+        agent_result = await client.table('agents').select('*').eq('agent_id', effective_agent_id).eq('account_id', account_id).execute()
+        
+        if not agent_result.data:
+            # Agent was deleted or doesn't exist
+            return {
+                "agent": None,
+                "source": "missing",
+                "message": f"Agent {effective_agent_id} not found or was deleted. You can select a different agent."
+            }
+        
+        agent_data = agent_result.data[0]
+        
+        # Use versioning system to get current version data
+        version_data = None
+        current_version = None
+        if agent_data.get('current_version_id'):
+            try:
+                version_service = await _get_version_service()
+                current_version_obj = await version_service.get_version(
+                    agent_id=effective_agent_id,
+                    version_id=agent_data['current_version_id'],
+                    user_id=user_id
+                )
+                current_version_data = current_version_obj.to_dict()
+                version_data = current_version_data
+                
+                # Create AgentVersionResponse from version data
+                current_version = AgentVersionResponse(
+                    version_id=current_version_data['version_id'],
+                    agent_id=current_version_data['agent_id'],
+                    version_number=current_version_data['version_number'],
+                    version_name=current_version_data['version_name'],
+                    system_prompt=current_version_data['system_prompt'],
+                    configured_mcps=current_version_data.get('configured_mcps', []),
+                    custom_mcps=current_version_data.get('custom_mcps', []),
+                    agentpress_tools=current_version_data.get('agentpress_tools', {}),
+                    is_active=current_version_data.get('is_active', True),
+                    created_at=current_version_data['created_at'],
+                    updated_at=current_version_data.get('updated_at', current_version_data['created_at']),
+                    created_by=current_version_data.get('created_by')
+                )
+                
+                logger.info(f"Using agent {agent_data['name']} version {current_version_data.get('version_name', 'v1')}")
+            except Exception as e:
+                logger.warning(f"Failed to get version data for agent {effective_agent_id}: {e}")
+        
+        # Extract configuration using the unified config approach
+        version_data = None
+        if current_version:
+            version_data = {
+                'version_id': current_version.version_id,
+                'agent_id': current_version.agent_id,
+                'version_number': current_version.version_number,
+                'version_name': current_version.version_name,
+                'system_prompt': current_version.system_prompt,
+                'configured_mcps': current_version.configured_mcps,
+                'custom_mcps': current_version.custom_mcps,
+                'agentpress_tools': current_version.agentpress_tools,
+                'is_active': current_version.is_active,
+                'created_at': current_version.created_at,
+                'updated_at': current_version.updated_at,
+                'created_by': current_version.created_by
+            }
+        
+        from agent.config_helper import extract_agent_config
+        agent_config = extract_agent_config(agent_data, version_data)
+        
+        system_prompt = agent_config['system_prompt']
+        configured_mcps = agent_config['configured_mcps']
+        custom_mcps = agent_config['custom_mcps']
+        agentpress_tools = agent_config['agentpress_tools']
+        
+        return AgentResponse(
+            agent_id=agent_data['agent_id'],
+            account_id=agent_data['account_id'],
+            name=agent_data['name'],
+            description=agent_data.get('description'),
+            system_prompt=system_prompt,
+            configured_mcps=configured_mcps,
+            custom_mcps=custom_mcps,
+            agentpress_tools=agentpress_tools,
+            is_default=agent_data.get('is_default', False),
+            is_public=agent_data.get('is_public', False),
+            tags=agent_data.get('tags', []),
+            avatar=agent_config.get('avatar'),
+            avatar_color=agent_config.get('avatar_color'),
+            created_at=agent_data['created_at'],
+            updated_at=agent_data.get('updated_at', agent_data['created_at']),
+            current_version_id=agent_data.get('current_version_id'),
+            version_count=agent_data.get('version_count', 1),
+            current_version=current_version,
+            metadata=agent_data.get('metadata')
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching agent {agent_id} for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch agent: {str(e)}")
 
 @router.get("/thread/{thread_id}/agent-runs")
 async def get_agent_runs(thread_id: str, user_id: str = Depends(get_current_user_id_from_jwt)):
@@ -1576,14 +1749,27 @@ async def create_agent(
         if agent_data.is_default:
             await client.table('agents').update({"is_default": False}).eq("account_id", user_id).eq("is_default", True).execute()
         
+        # Create the config field with the required structure for the database constraint
+        config = {
+            "system_prompt": agent_data.system_prompt,
+            "tools": {
+                "agentpress": agent_data.agentpress_tools or {},
+                "mcp": agent_data.configured_mcps or [],
+                "custom_mcp": agent_data.custom_mcps or []
+            },
+            "metadata": {
+                "avatar": agent_data.avatar,
+                "avatar_color": agent_data.avatar_color
+            }
+        }
+        
         insert_data = {
             "account_id": user_id,
             "name": agent_data.name,
             "description": agent_data.description,
-            "avatar": agent_data.avatar,
-            "avatar_color": agent_data.avatar_color,
             "is_default": agent_data.is_default or False,
-            "version_count": 1
+            "version_count": 1,
+            "config": config
         }
         
         new_agent = await client.table('agents').insert(insert_data).execute()
@@ -1592,10 +1778,14 @@ async def create_agent(
             raise HTTPException(status_code=500, detail="Failed to create agent")
         
         agent = new_agent.data[0]
+        logger.info("CRITICAL DEBUG: Agent created successfully, about to start version creation")
         
         try:
+            logger.info("=== STARTING VERSION CREATION SECTION ===")
+            logger.info("DEBUG: This is a test log to see if code is updated")
             version_service = await _get_version_service()
 
+            logger.info("About to call create_version")
             version = await version_service.create_version(
                 agent_id=agent['agent_id'],
                 user_id=user_id,
@@ -1607,24 +1797,46 @@ async def create_agent(
                 change_description="Initial version"
             )
             
-            agent['current_version_id'] = version['version_id']
-            agent['version_count'] = 1
+            logger.info("=== VERSION CREATION COMPLETED ===")
+            logger.info(f"create_version returned: {version}")
+            logger.info(f"Version object type: {type(version)}")
+            logger.info(f"Version object attributes: {dir(version)}")
+            logger.info(f"Version object repr: {repr(version)}")
             
-            # Create proper AgentVersionResponse from version dict
-            current_version = AgentVersionResponse(
-                version_id=version['version_id'],
-                agent_id=version['agent_id'],
-                version_number=version['version_number'],
-                version_name=version['version_name'],
-                system_prompt=version['system_prompt'],
-                configured_mcps=version.get('configured_mcps', []),
-                custom_mcps=version.get('custom_mcps', []),
-                agentpress_tools=version.get('agentpress_tools', {}),
-                is_active=version.get('is_active', True),
-                created_at=version['created_at'],
-                updated_at=version.get('updated_at', version['created_at']),
-                created_by=version.get('created_by')
-            )
+            try:
+                logger.info("=== PROCESSING VERSION OBJECT ===")
+                logger.info(f"Version object type: {type(version)}")
+                logger.info(f"Version object has to_dict method: {hasattr(version, 'to_dict')}")
+                
+                # Access version object attributes directly instead of using to_dict()
+                agent['current_version_id'] = version.version_id
+                agent['version_count'] = 1
+                
+                # Create proper AgentVersionResponse from version object attributes
+                current_version = AgentVersionResponse(
+                    version_id=version.version_id,
+                    agent_id=version.agent_id,
+                    version_number=version.version_number,
+                    version_name=version.version_name,
+                    system_prompt=version.system_prompt,
+                    configured_mcps=getattr(version, 'configured_mcps', []),
+                    custom_mcps=getattr(version, 'custom_mcps', []),
+                    agentpress_tools=getattr(version, 'agentpress_tools', {}),
+                    is_active=getattr(version, 'is_active', True),
+                    status='active' if getattr(version, 'is_active', True) else 'inactive',
+                    created_at=version.created_at.isoformat() if hasattr(version.created_at, 'isoformat') else str(version.created_at),
+                    updated_at=version.updated_at.isoformat() if hasattr(version.updated_at, 'isoformat') else str(version.updated_at),
+                    created_by=getattr(version, 'created_by', None),
+                    change_description=getattr(version, 'change_description', 'Initial version'),
+                    previous_version_id=getattr(version, 'previous_version_id', None)
+                )
+                logger.info(f"Successfully created AgentVersionResponse")
+            except Exception as inner_e:
+                logger.error(f"Error in version processing: {str(inner_e)}")
+                logger.error(f"Error type: {type(inner_e)}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                raise
         except Exception as e:
             logger.error(f"Error creating initial version: {str(e)}")
             # Clean up the agent if version creation fails
@@ -1639,15 +1851,15 @@ async def create_agent(
             account_id=agent['account_id'],
             name=agent['name'],
             description=agent.get('description'),
-            system_prompt=version['system_prompt'],
-            configured_mcps=version.get('configured_mcps', []),
-            custom_mcps=version.get('custom_mcps', []),
-            agentpress_tools=version.get('agentpress_tools', {}),
+            system_prompt=version.system_prompt,
+            configured_mcps=getattr(version, 'configured_mcps', []),
+            custom_mcps=getattr(version, 'custom_mcps', []),
+            agentpress_tools=getattr(version, 'agentpress_tools', {}),
             is_default=agent.get('is_default', False),
             is_public=agent.get('is_public', False),
             tags=agent.get('tags', []),
-            avatar=agent.get('avatar'),
-            avatar_color=agent.get('avatar_color'),
+            avatar=agent.get('config', {}).get('metadata', {}).get('avatar'),
+            avatar_color=agent.get('config', {}).get('metadata', {}).get('avatar_color'),
             created_at=agent['created_at'],
             updated_at=agent.get('updated_at', agent['created_at']),
             current_version_id=agent.get('current_version_id'),
@@ -1908,9 +2120,9 @@ async def update_agent(
                 
                 new_version_id = new_version.version_id
                 update_data['current_version_id'] = new_version_id
-                update_data['version_count'] = new_version['version_number']
+                update_data['version_count'] = new_version.version_number
                 
-                logger.info(f"Created new version {new_version['version_name']} for agent {agent_id}")
+                logger.info(f"Created new version {new_version.version_name} for agent {agent_id}")
                 
             except HTTPException:
                 raise
@@ -2420,7 +2632,7 @@ async def update_custom_mcp_tools_for_agent(
         
         from agent.versioning.version_service import get_version_service
         try:
-            version_service = await get_version_service()
+            version_service = await get_version_service(db)
             new_version = await version_service.create_version(
                 agent_id=agent_id,
                 user_id=user_id,

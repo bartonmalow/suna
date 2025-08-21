@@ -237,7 +237,7 @@ class TemplateInstallationService:
             
             await self._agent_repo.update_version_info(
                 agent_id=agent_id,
-                version_id=version['version_id'],
+                version_id=version.version_id,
                 version_count=1
             )
             
