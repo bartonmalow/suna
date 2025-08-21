@@ -395,3 +395,6 @@ dump.rdb
 # Local development
 .local/
 local/
+
+# Setup progress tracking
+.setup_progress
