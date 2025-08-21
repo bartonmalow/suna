@@ -227,7 +227,7 @@ class AgentExecutor:
             
             agent_data = agent_result.data[0]
             
-            from agent.versioning.version_service import get_version_service
+            from agent.versioning.infrastructure.dependencies import get_version_service
             version_service = await get_version_service()
             
             active_version = await version_service.get_active_version(agent_id, "system")
@@ -407,7 +407,7 @@ class WorkflowExecutor:
             agent_data = agent_result.data[0]
             account_id = agent_data['account_id']
             
-            from agent.versioning.version_service import get_version_service
+            from agent.versioning.infrastructure.dependencies import get_version_service
             version_service = await get_version_service()
             
             active_version = await version_service.get_active_version(agent_id, "system")

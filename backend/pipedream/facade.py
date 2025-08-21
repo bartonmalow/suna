@@ -228,7 +228,7 @@ class PipedreamManager:
         user_id: str
     ) -> List[str]:
         from services.supabase import DBConnection
-        from agent.versioning.version_service import get_version_service
+        from agent.versioning.infrastructure.dependencies import get_version_service
         
         db = DBConnection()
         client = await db.client
@@ -285,7 +285,7 @@ class PipedreamManager:
         version_id: str
     ) -> List[str]:
         from services.supabase import DBConnection
-        from agent.versioning.version_service import get_version_service
+        from agent.versioning.infrastructure.dependencies import get_version_service
         
         db = DBConnection()
         client = await db.client
