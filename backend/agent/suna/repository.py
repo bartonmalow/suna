@@ -162,18 +162,31 @@ class SunaAgentRepository:
             
             client = await self.db.client
             
+            # Create the config field with the required structure for the database constraint
+            config = {
+                "system_prompt": "[MANAGED]",
+                "tools": {
+                    "agentpress": SunaConfig.DEFAULT_TOOLS,
+                    "mcp": SunaConfig.DEFAULT_MCPS,
+                    "custom_mcp": SunaConfig.DEFAULT_CUSTOM_MCPS
+                },
+                "metadata": {
+                    "avatar": SunaConfig.AVATAR,
+                    "avatar_color": SunaConfig.AVATAR_COLOR
+                }
+            }
+            
             agent_data = {
                 "account_id": account_id,
                 "name": SunaConfig.NAME,
                 "description": SunaConfig.DESCRIPTION,
                 "is_default": True,
-                "avatar": SunaConfig.AVATAR,
-                "avatar_color": SunaConfig.AVATAR_COLOR,
                 "metadata": {
                     "is_suna_default": True,
                     "centrally_managed": True,
                     "installation_date": datetime.now(timezone.utc).isoformat()
                 },
+                "config": config,
                 "version_count": 1
             }
             
@@ -257,7 +270,7 @@ class SunaAgentRepository:
         agentpress_tools: Dict[str, Any]
     ) -> None:
         try:
-            from agent.versioning.version_service import get_version_service
+            from agent.versioning.services.version_service import get_version_service
             
             version_service = await get_version_service()
             await version_service.create_version(

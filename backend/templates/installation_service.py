@@ -283,18 +283,31 @@ class InstallationService:
         
         client = await self._db.client
         
+        # Create the config field with the required structure for the database constraint
+        config = {
+            "system_prompt": agent_config.get('system_prompt', ''),
+            "tools": {
+                "agentpress": agent_config.get('tools', {}).get('agentpress', {}),
+                "mcp": agent_config.get('tools', {}).get('mcp', []),
+                "custom_mcp": agent_config.get('tools', {}).get('custom_mcp', [])
+            },
+            "metadata": {
+                "avatar": template.avatar,
+                "avatar_color": template.avatar_color
+            }
+        }
+        
         agent_data = {
             'agent_id': agent_id,
             'account_id': request.account_id,
             'name': agent_name,
             'description': template.description,
-            'avatar': template.avatar,
-            'avatar_color': template.avatar_color,
             'metadata': {
                 **template.metadata,
                 'created_from_template': template.template_id,
                 'template_name': template.name
             },
+            'config': config,
             'created_at': datetime.now(timezone.utc).isoformat(),
             'updated_at': datetime.now(timezone.utc).isoformat()
         }

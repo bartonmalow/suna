@@ -169,10 +169,10 @@ class VersionManagerFacade:
             
             if current_version:
                 version_config = {
-                    'system_prompt': current_version['system_prompt'],
-                    'configured_mcps': current_version.get('configured_mcps', []),
-                    'custom_mcps': current_version.get('custom_mcps', []),
-                    'agentpress_tools': current_version.get('agentpress_tools', {})
+                    'system_prompt': current_version.system_prompt,
+                    'configured_mcps': getattr(current_version, 'configured_mcps', []),
+                    'custom_mcps': getattr(current_version, 'custom_mcps', []),
+                    'agentpress_tools': getattr(current_version, 'agentpress_tools', {})
                 }
                 
                 if current_config == version_config:
@@ -191,7 +191,7 @@ class VersionManagerFacade:
                 change_description=change_description
             )
             
-            return new_version['version_id']
+            return new_version.version_id
             
         except Exception as e:
             logger.error(f"Error in auto-versioning for agent {agent_id}: {str(e)}")

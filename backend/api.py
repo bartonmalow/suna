@@ -29,6 +29,9 @@ from services import transcription as transcription_api
 import sys
 from services import email_api
 from triggers import api as triggers_api
+from pipedream import api as pipedream_api
+from credentials import api as credentials_api
+from templates import api as template_api
 
 
 if sys.platform == "win32":

@@ -157,8 +157,8 @@ class TemplateService:
             tags=tags or [],
             is_public=make_public,
             marketplace_published_at=datetime.now(timezone.utc) if make_public else None,
-            avatar=agent.get('avatar'),
-            avatar_color=agent.get('avatar_color'),
+            avatar=agent.get('config', {}).get('metadata', {}).get('avatar'),
+            avatar_color=agent.get('config', {}).get('metadata', {}).get('avatar_color'),
             metadata=agent.get('metadata', {})
         )
         
