@@ -402,7 +402,7 @@ class InstallationService:
             agentpress_tools = tools.get('agentpress', {})
             model = agent_config.get('model')
             
-            from agent.versioning.version_service import get_version_service
+            from agent.versioning.infrastructure.dependencies import get_version_service
             version_service = await get_version_service()
             await version_service.create_version(
                 agent_id=agent_id,
