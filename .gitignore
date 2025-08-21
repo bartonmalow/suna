@@ -1,4 +1,5 @@
 # Python
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -395,6 +396,3 @@ dump.rdb
 # Local development
 .local/
 local/
-
-# Setup progress tracking
-.setup_progress

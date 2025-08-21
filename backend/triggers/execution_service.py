@@ -231,6 +231,9 @@ class AgentExecutor:
                 return None
             
             agent_data = agent_result.data[0]
+            
+            from agent.versioning.infrastructure.dependencies import get_version_service
+            version_service = await get_version_service()
             account_id = agent_data.get('account_id')
             current_version_id = agent_data.get('current_version_id')
             logger.debug(f"Found agent in database: {agent_data.get('name')}, account_id: {account_id}, current_version_id: {current_version_id}")
