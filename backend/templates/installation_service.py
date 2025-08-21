@@ -330,7 +330,7 @@ class InstallationService:
             custom_mcps = tools.get('custom_mcp', [])
             agentpress_tools = tools.get('agentpress', {})
             
-            from agent.versioning.version_service import get_version_service
+            from agent.versioning.infrastructure.dependencies import get_version_service
             version_service = await get_version_service()
             await version_service.create_version(
                 agent_id=agent_id,
