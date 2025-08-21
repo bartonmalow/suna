@@ -15,6 +15,7 @@ from .version_service import (
     InvalidVersionError,
     VersionConflictError
 )
+from .infrastructure.dependencies import set_db_connection
 
 router = APIRouter()
 
@@ -225,5 +226,7 @@ async def update_version_details(
 
 
 def initialize(db_connection=None):
+    if db_connection:
+        set_db_connection(db_connection)
     logger.debug("Versioning API initialized")
     return router 

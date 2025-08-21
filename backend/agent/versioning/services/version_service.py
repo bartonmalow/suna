@@ -4,9 +4,10 @@ from ..domain.entities import (
     AgentVersion, VersionId, AgentId, UserId, VersionNumber,
     SystemPrompt, MCPConfiguration, ToolConfiguration, VersionStatus
 )
-from ..domain.repositories import (
-    IVersionRepository, IAgentRepository
+from ..infrastructure.supabase_repositories import (
+    SupabaseVersionRepository, SupabaseAgentRepository
 )
+from services.supabase import DBConnection
 from .exceptions import (
     VersionNotFoundError, AgentNotFoundError, UnauthorizedError,
     InvalidVersionError, VersionConflictError
@@ -14,13 +15,34 @@ from .exceptions import (
 
 
 class VersionService:
-    def __init__(
-        self,
-        version_repo: IVersionRepository,
-        agent_repo: IAgentRepository
-    ):
-        self.version_repo = version_repo
-        self.agent_repo = agent_repo
+    def __init__(self, db_connection: Optional[DBConnection] = None):
+        if db_connection:
+            self.db = db_connection
+        else:
+            self.db = DBConnection()
+    
+    async def _get_client(self):
+        return await self.db.client
+    
+    async def _verify_agent_access(self, agent_id: str, user_id: str) -> tuple[bool, bool]:
+        if user_id == "system":
+            return True, True
+            
+        client = await self._get_client()
+        
+        owner_result = await client.table('agents').select('account_id').eq(
+            'agent_id', agent_id
+        ).eq('account_id', user_id).execute()
+        
+        is_owner = bool(owner_result.data)
+        
+        public_result = await client.table('agents').select('is_public').eq(
+            'agent_id', agent_id
+        ).execute()
+        
+        is_public = bool(public_result.data and public_result.data[0].get('is_public', False))
+        
+        return is_owner, is_public
     
     async def create_version(
         self,
@@ -33,16 +55,19 @@ class VersionService:
         version_name: Optional[str] = None,
         change_description: Optional[str] = None
     ) -> AgentVersion:
-        if not await self.agent_repo.verify_ownership(agent_id, user_id):
+        is_owner, is_public = await self._verify_agent_access(agent_id, user_id)
+        
+        if not is_owner and not is_public:
             raise UnauthorizedError("You don't have permission to create versions for this agent")
         
-        agent = await self.agent_repo.find_by_id(agent_id)
+        client = await self._get_client()
+        agent = await SupabaseAgentRepository(client).find_by_id(agent_id)
         if not agent:
             raise AgentNotFoundError(f"Agent {agent_id} not found")
         
-        version_number = await self.version_repo.get_next_version_number(agent_id)
+        version_number = await SupabaseVersionRepository(client).get_next_version_number(agent_id)
         version_name = version_name or str(version_number)
-        current_active = await self.version_repo.find_active_version(agent_id)
+        current_active = await SupabaseVersionRepository(client).find_active_version(agent_id)
         
         version = AgentVersion(
             version_id=VersionId.generate(),
@@ -79,12 +104,12 @@ class VersionService:
         
         if current_active:
             current_active.deactivate()
-            await self.version_repo.update(current_active)
+            await SupabaseVersionRepository(client).update(current_active)
         
-        created_version = await self.version_repo.create(version)
+        created_version = await SupabaseVersionRepository(client).create(version)
         
-        version_count = await self.version_repo.count_versions(agent_id)
-        await self.agent_repo.update_current_version(
+        version_count = await SupabaseVersionRepository(client).count_versions(agent_id)
+        await SupabaseAgentRepository(client).update_current_version(
             agent_id, created_version.version_id, version_count
         )
         return created_version
@@ -95,13 +120,13 @@ class VersionService:
         version_id: VersionId, 
         user_id: UserId
     ) -> AgentVersion:
-        is_owner = await self.agent_repo.verify_ownership(agent_id, user_id)
-        is_public = await self.agent_repo.is_public(agent_id)
+        is_owner, is_public = await self._verify_agent_access(agent_id, user_id)
         
         if not is_owner and not is_public:
             raise UnauthorizedError("You don't have permission to view this version")
         
-        version = await self.version_repo.find_by_id(version_id)
+        client = await self._get_client()
+        version = await SupabaseVersionRepository(client).find_by_id(version_id)
         if not version or version.agent_id != agent_id:
             raise VersionNotFoundError(f"Version {version_id} not found")
         
@@ -112,13 +137,13 @@ class VersionService:
         agent_id: AgentId, 
         user_id: UserId
     ) -> List[AgentVersion]:
-        is_owner = await self.agent_repo.verify_ownership(agent_id, user_id)
-        is_public = await self.agent_repo.is_public(agent_id)
+        is_owner, is_public = await self._verify_agent_access(agent_id, user_id)
         
         if not is_owner and not is_public:
             raise UnauthorizedError("You don't have permission to view versions")
         
-        versions = await self.version_repo.find_by_agent_id(agent_id)
+        client = await self._get_client()
+        versions = await SupabaseVersionRepository(client).find_by_agent_id(agent_id)
         return sorted(versions, key=lambda v: v.version_number.value, reverse=True)
     
     async def activate_version(
@@ -127,26 +152,29 @@ class VersionService:
         version_id: VersionId,
         user_id: UserId
     ) -> None:
-        if not await self.agent_repo.verify_ownership(agent_id, user_id):
+        is_owner, is_public = await self._verify_agent_access(agent_id, user_id)
+        
+        if not is_owner and not is_public:
             raise UnauthorizedError("You don't have permission to activate versions")
         
-        version = await self.version_repo.find_by_id(version_id)
+        client = await self._get_client()
+        version = await SupabaseVersionRepository(client).find_by_id(version_id)
         if not version or version.agent_id != agent_id:
             raise VersionNotFoundError(f"Version {version_id} not found")
         
         if version.status == VersionStatus.ARCHIVED:
             raise InvalidVersionError("Cannot activate archived version")
         
-        current_active = await self.version_repo.find_active_version(agent_id)
+        current_active = await SupabaseVersionRepository(client).find_active_version(agent_id)
         if current_active and current_active.version_id != version_id:
             current_active.deactivate()
-            await self.version_repo.update(current_active)
+            await SupabaseVersionRepository(client).update(current_active)
         
         version.activate()
-        await self.version_repo.update(version)
+        await SupabaseVersionRepository(client).update(version)
         
-        version_count = await self.version_repo.count_versions(agent_id)
-        await self.agent_repo.update_current_version(
+        version_count = await SupabaseVersionRepository(client).count_versions(agent_id)
+        await SupabaseAgentRepository(client).update_current_version(
             agent_id, version.version_id, version_count
         )
     
@@ -219,7 +247,9 @@ class VersionService:
     ) -> AgentVersion:
         version_to_restore = await self.get_version(agent_id, version_id, user_id)
         
-        if not await self.agent_repo.verify_ownership(agent_id, user_id):
+        is_owner, is_public = await self._verify_agent_access(agent_id, user_id)
+        
+        if not is_owner and not is_public:
             raise UnauthorizedError("You don't have permission to rollback versions")
         
         new_version = await self.create_version(
@@ -258,10 +288,13 @@ class VersionService:
         version_name: Optional[str] = None,
         change_description: Optional[str] = None
     ) -> AgentVersion:
-        if not await self.agent_repo.verify_ownership(agent_id, user_id):
+        is_owner, is_public = await self._verify_agent_access(agent_id, user_id)
+        
+        if not is_owner and not is_public:
             raise UnauthorizedError("You don't have permission to update this version")
         
-        version = await self.version_repo.find_by_id(version_id)
+        client = await self._get_client()
+        version = await SupabaseVersionRepository(client).find_by_id(version_id)
         if not version or version.agent_id != agent_id:
             raise VersionNotFoundError(f"Version {version_id} not found")
         
@@ -272,6 +305,6 @@ class VersionService:
         
         version.updated_at = datetime.utcnow()
         
-        updated_version = await self.version_repo.update(version)
+        updated_version = await SupabaseVersionRepository(client).update(version)
         
         return updated_version 
